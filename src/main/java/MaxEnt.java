@@ -1,181 +1,143 @@
-import com.google.common.collect.*;
-
 import java.io.FileNotFoundException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.List;
 
 /**
  * Created with IntelliJ IDEA.
- * User: tpeng
+ * User: tpeng  <pengtaoo@gmail.com>
  * Date: 7/5/12
  * Time: 11:31 PM
  * To change this template use File | Settings | File Templates.
  */
 public class MaxEnt {
 
-    private final int ITERATIONS = 1000;
+    private final static boolean DEBUG = true;
+
+    private final int ITERATIONS = 200;
 
     private static final double EPSILON = 0.001;
 
-    // the labels and features in insertion order
-    // so index of label/feature can match
-    private List<String> labels;
-    private List<String> features;
-
-    // the number of the sample instances
+    // the number of training instances
     private int N;
 
-    // the number of features
-    private int n;
+    // the minimal of Y
+    private int minY;
 
-    // the number of labels
-    private int m;
+    // the maximum of Y
+    private int maxY;
 
-    // the number of feature functions.
-    private int featureCount;
-
-    // the empirical p(x)
-    private double empirical_x[];
-
-    // the empirical p[x][y]
-    private double empirical_x_y[][];
-
-    // the empirical expectation of fi
+    // the empirical expectation value of f(x, y)
     private double empirical_expects[];
 
-    // the f[x][y]: whether x and y has shown together
-    private int f[][];
-
-    // the #f[x][y] the count of x and y has shown together
-    private int f_sharp[][];
-
-    // the weight to learn. size is featureCount
+    // the weight to learn.
     private double w[];
 
-    // the delta to calculate in every iteration.
-    // w[i] = w[i] + delta[i]
-    // size is featureCount
-    private double delta[];
+    private List<Instance> instances = new ArrayList<Instance>();
 
-    private List<Instance> instances;
+    private List<FeatureFunction> functions = new ArrayList<FeatureFunction>();
+
+    private List<Feature> features = new ArrayList<Feature>();
 
     public static void main(String... args) throws FileNotFoundException {
         List<Instance> instances = DataSet.readDataSet("examples/zoo.train");
         MaxEnt me = new MaxEnt(instances);
         me.train();
+
+        List<Instance> trainInstances = DataSet.readDataSet("examples/zoo.test");
+        int pass = 0;
+        for (Instance instance : trainInstances) {
+            int predict = me.classify(instance);
+            if (predict == instance.getLabel()) {
+                pass += 1;
+            }
+        }
+
+        System.out.println("accuracy: " + 1.0 * pass / trainInstances.size());
     }
 
-    public MaxEnt(List<Instance> instances) {
+    public MaxEnt(List<Instance> trainInstance) {
 
-        this.instances = instances;
-
-        // label:count
-        Multiset<String> labelSet = LinkedHashMultiset.create();
-        // feature: count
-        Multiset<String> featureSet = LinkedHashMultiset.create();
-        // label: feature count
-        // Google guava doesn't provide a Multimap use Multiset as value?
-        Map<String, Multiset<String>> labelFeatures = Maps.newHashMap();
-
-        Multimap<String, List<String>> labelFeatSet = HashMultimap.create();
-
-        for (Instance instance : instances) {
-            labelSet.add(instance.getLabel());
-            featureSet.addAll(instance.getFeatures());
-            labelFeatSet.put(instance.getLabel(), instance.getFeatures());
-        }
-
-        for (String label : labelFeatSet.keySet()) {
-            Collection<List<String>> features = labelFeatSet.get(label);
-            Multiset<String> s = LinkedHashMultiset.create();
-            for (List<String> f : features) {
-                s.addAll(f);
-            }
-            labelFeatures.put(label, s);
-        }
-
-        labels = new ArrayList<String>(labelSet.elementSet());
-        features = new ArrayList<String>(featureSet.elementSet());
-
+        instances.addAll(trainInstance);
         N = instances.size();
-        n = features.size();
-        m = labels.size();
-
-        empirical_x = new double[n];
-        // the count of feature has shown divided by N
-        for (int i = 0; i < empirical_x.length; i++) {
-            String x = features.get(i);
-            empirical_x[i] = 1.0 * featureSet.count(x) / N;
-        }
-
-        empirical_x_y = new double[n][m];
-        f = new int[n][m];
-        f_sharp = new int[n][m];
-
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < m; j++) {
-                String x = features.get(i);
-                String y = labels.get(j);
-                Multiset<String> features = labelFeatures.get(y);
-                int count = features.count(x);
-                empirical_x_y[i][j] = 1.0 * count / N;
-                f_sharp[i][j] = count;
-                f[i][j] = count > 0 ? 1 : 0;
-            }
-        }
-
-        // TODO: select the best features with information gain
-        featureCount = n * m;
-        w = new double[featureCount];
-        delta = new double[featureCount];
-
-        empirical_expects = calc_empirical_expects();
+        createFeatFunctions(instances);
+        w = new double[functions.size()];
+        empirical_expects = new double[functions.size()];
+        calc_empirical_expects();
     }
 
-    /**
-     * Calculates the p(y|x)
-     */
-    private double[][] calc_prob_y_given_x() {
-        double cond[][] = new double[n][m];
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < m; j++) {
-                cond[i][j] = calc_prob_y_given_x(i, j);
+    private void createFeatFunctions(List<Instance> instances) {
+
+        int maxLabel = 0;
+        int[] maxFeatures = new int[instances.get(0).getFeature().getValues().length];
+        LinkedHashSet<Feature> featureSet = new LinkedHashSet<Feature>();
+
+        minY = 1;                   // TODO: check automatically
+        for (Instance instance : instances) {
+
+            if (instance.getLabel() > maxLabel) {
+                maxLabel = instance.getLabel();
+            }
+
+            for (int i = 0; i < instance.getFeature().getValues().length; i++) {
+                if (instance.getFeature().getValues()[i] > maxFeatures[i]) {
+                    maxFeatures[i] = instance.getFeature().getValues()[i];
+                }
+            }
+
+            featureSet.add(instance.getFeature());
+        }
+
+        features = new ArrayList<Feature>(featureSet);
+
+        maxY = maxLabel;
+
+        for (int i = 0; i < maxFeatures.length; i++) {
+            for (int x = 0; x <= maxFeatures[i]; x++) {
+                for (int y = minY; y <= maxLabel; y++) {
+                    functions.add(new FeatureFunction(i, x, y));
+                }
             }
         }
-        return cond;
+
+        if (DEBUG) {
+            System.out.println("# features = " + features.size());
+            System.out.println("# functions = " + functions.size());
+        }
     }
 
     // calculates the p(y|x)
-    private double calc_prob_y_given_x(int x_index, int y_index) {
-        double z_all = 0;
-        double z = 0;
-        double sum = 0;
+    private double[][] calc_prob_y_given_x() {
 
-        for (int j = 0; j < m; j++) {
-            z_all = 0;
-            for (int i = 0; i < featureCount; i++) {
-                double zj = w[i] * eval_feature_fn(i, x_index, y_index);
-                if (j == y_index) {
-                    z += zj;
+        double[][] cond_prob = new double[features.size()][maxY + 1];
+
+        for (int y = minY; y <= maxY; y++) {
+            for (int i = 0; i < features.size(); i++) {
+                double z = 0;
+                for (int j = 0; j < functions.size(); j++) {
+                    z += w[j] * functions.get(j).apply(features.get(i), y);
                 }
-                z_all += zj;
+                cond_prob[i][y] = Math.exp(z);
             }
-            sum += Math.exp(z_all);
         }
-        return Math.exp(z) / sum;
-    }
 
-    // Evaluates the feature function
-    private int eval_feature_fn(int i, int x, int y) {
-        // FIXME: simply if x and y co-occurrence
-        if (i / n == y && i % n == x)
-            return f[x][y];
-        return 0;
+        for (int i = 0; i < features.size(); i++) {
+            double normalize = 0;
+            for (int y = minY; y <= maxY; y++) {
+                normalize += cond_prob[i][y];
+            }
+            for (int y = minY; y <= maxY; y++) {
+                cond_prob[i][y] /= normalize;
+            }
+        }
+
+        return cond_prob;
     }
 
     public void train() {
-
         for (int k = 0; k < ITERATIONS; k++) {
-            for (int i = 0; i < featureCount; i++) {
+            for (int i = 0; i < functions.size(); i++) {
                 double delta = iis_solve_delta(empirical_expects[i], i);
                 w[i] += delta;
             }
@@ -183,67 +145,105 @@ public class MaxEnt {
         }
     }
 
-    private double[] calc_empirical_expects() {
+    public int classify(Instance instance) {
 
-        double[] expects = new double[featureCount];
+        double max = 0;
+        int label = 0;
 
-        for (Instance instance : instances) {
-            String y = instance.getLabel();
-            int y_index = labels.indexOf(y);
-            for (String x : instance.getFeatures()) {
-                int x_index = features.indexOf(x);
-                for (int i = 0; i < featureCount; i++) {
-                    double fi = eval_feature_fn(i, x_index, y_index);
-                    expects[i] += empirical_x_y[x_index][y_index] * fi;
-                }
+        for (int y = minY; y <= maxY; y++) {
+            double sum = 0;
+            for (int i = 0; i < functions.size(); i++) {
+                sum += Math.exp(w[i] * functions.get(i).apply(instance.getFeature(), y));
+            }
+            if (sum > max) {
+                max = sum;
+                label = y;
             }
         }
-        return expects;
+        return label;
     }
 
-    private double iis_solve_delta(double empirical, int fn_index) {
+    private void calc_empirical_expects() {
 
-        double delta = 1.0;
-        double f_newton = 0.0;
-        double df_newton = 0.0;
+        for (Instance instance : instances) {
+            int y = instance.getLabel();
+            Feature feature = instance.getFeature();
+            for (int i = 0; i < functions.size(); i++) {
+                empirical_expects[i] += functions.get(i).apply(feature, y);
+            }
+        }
+        for (int i = 0; i < functions.size(); i++) {
+            empirical_expects[i] /= 1.0 * N;
+        }
+        System.out.println(Arrays.toString(empirical_expects));
+    }
+
+    private int apply_f_sharp(Feature feature, int y) {
+
+        int sum = 0;
+        for (int i = 0; i < functions.size(); i++) {
+            FeatureFunction function = functions.get(i);
+            sum += function.apply(feature, y);
+        }
+        return sum;
+    }
+
+    private double iis_solve_delta(double empirical_e, int fi) {
+
+        double delta = 0;
+        double f_newton, df_newton;
         double p_yx[][] = calc_prob_y_given_x();
 
         int iters = 0;
 
         while (iters < 50) {
-            f_newton = df_newton = 0.0;
-            for (Instance instance : instances) {
-                String y = instance.getLabel();
-                int y_index = labels.indexOf(y);
-                for (String x : instance.getFeatures()) {
-                    int x_index = features.indexOf(x);
-                    double fi = eval_feature_fn(fn_index, x_index, y_index);
-                    double prod = empirical_x[x_index] * p_yx[x_index][y_index] * fi *
-                            Math.exp(delta * f_sharp[x_index][y_index]);
+            f_newton = df_newton = 0;
+            for (int i = 0; i < instances.size(); i++) {
+                Instance instance = instances.get(i);
+                Feature feature = instance.getFeature();
+                int index = features.indexOf(feature);
+                for (int y = minY; y <= maxY; y++) {
+                    int f_sharp = apply_f_sharp(feature, y);
+                    double prod = p_yx[index][y] * functions.get(fi).apply(feature, y) * Math.exp(delta * f_sharp);
                     f_newton += prod;
-                    df_newton += prod * f_sharp[x_index][y_index];
+                    df_newton += prod * f_sharp;
                 }
             }
-            f_newton = empirical - f_newton;
+            f_newton = empirical_e - f_newton / N;
+            df_newton = -df_newton / N;
 
-            if (Math.abs(f_newton) < 0.000001) {
-                // f_newton might = 0
+            if (Math.abs(f_newton) < 0.0000001)
                 return delta;
-            }
 
-            df_newton = -df_newton;
             double ratio = f_newton / df_newton;
 
             delta -= ratio;
-
             if (Math.abs(ratio) < EPSILON) {
                 return delta;
             }
             iters++;
         }
-        if (iters == 50) {
-            throw new RuntimeException("not converged");
+        throw new RuntimeException("IIS did not converge");
+    }
+
+    class FeatureFunction {
+
+        private int index;
+        private int value;
+        private int label;
+
+        FeatureFunction(int index, int value, int label) {
+            this.index = index;
+            this.value = value;
+            this.label = label;
         }
-        return delta;
+
+        public int apply(Feature feature, int label) {
+            if (feature.getValues()[index] == value && label == this.label)
+                return 1;
+            return 0;
+        }
     }
 }
+
+

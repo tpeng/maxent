@@ -11,11 +11,8 @@ import java.util.Scanner;
  *
  * e.g. c1 f21 f30 f40 f51 f60 f70 f81 f91 f101 f111 f120 f130 f144 f150 f160 f171
  *
- * c1 is the label
- * f21 and others are the feature, the default value is 1.
- *
  * Created with IntelliJ IDEA.
- * User: tpeng
+ * User: tpeng  <pengtaoo@gmail.com>
  * Date: 7/5/12
  * Time: 11:20 PM
  */
@@ -29,11 +26,13 @@ public class DataSet {
         while (scanner.hasNextLine()) {
             String line = scanner.nextLine();
             List<String> tokens = Arrays.asList(line.split("\\s"));
-            String label = tokens.get(0);
-            List<String> features = new ArrayList<String>();
+            String s1 = tokens.get(0);
+            int label = Integer.parseInt(s1.substring(s1.length()-1));
+            int[] features = new int[tokens.size()-1];
 
             for (int i=1; i<tokens.size(); i++) {
-                features.add(tokens.get(i));
+                String s = tokens.get(i);
+                features[i-1] = Integer.parseInt(s.substring(s.length() - 1));
             }
             Instance instance = new Instance(label, features);
             instances.add(instance);
